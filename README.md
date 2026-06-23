@@ -112,6 +112,54 @@ See `scripts/create_gui_session.ps1` and `scripts/create_gui_session.py` for thi
 wrappers around the create flow. They read the password from the same env/stdin
 sources as the Rust CLI; they do not accept a direct password argument.
 
+## Python Package
+
+A subprocess-based Python package lives in `python/`. It invokes the Rust CLI
+with `--output json` and returns the parsed create-session report.
+
+```sh
+python -m pip install -e .
+```
+
+Install from GitHub without `#subdirectory`:
+
+```sh
+python -m pip install "git+https://github.com/jqwn/rdp-session.git"
+```
+
+For dependency files, pin to a tag or commit:
+
+```text
+rdp-session @ git+https://github.com/jqwn/rdp-session.git@<tag-or-commit>
+```
+
+Use the default password environment variable:
+
+```python
+from rdp_session import create_session
+
+report = create_session(
+    host="127.0.0.1",
+    username="appuser",
+    screenshot=r"C:\Temp\rdp-desktop.png",
+)
+```
+
+Or pass the password to the child process through stdin:
+
+```python
+report = create_session(
+    host="127.0.0.1",
+    username="appuser",
+    password="secret",
+)
+```
+
+The wrapper locates the CLI from `tool=...`, `RDP_SESSION_BIN`, or `PATH`.
+On Windows x86_64 and ARM64, if no local binary is found, it downloads the
+matching versioned release asset from GitHub and caches it under the user's
+local app data directory.
+
 ## Notes
 
 - `status` and `ensure` are intentionally not part of the Rust CLI. Keeping that

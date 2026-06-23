@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rdp-session"
+version = "0.2.0"
+description = "Thin Python subprocess wrapper for the rdp-session Rust CLI"
+readme = "python/README.md"
+requires-python = ">=3.9"
+authors = [
+  { name = "rdp-session contributors" },
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Operating System :: Microsoft :: Windows",
+]
+
+[tool.setuptools.packages.find]
+where = ["python/src"]

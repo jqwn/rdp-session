@@ -22,10 +22,8 @@ jobs:
         include:
           - arch: x86_64
             target: x86_64-pc-windows-msvc
-            exe_name: rdp-session-windows-x86_64.exe
           - arch: arm64
             target: aarch64-pc-windows-msvc
-            exe_name: rdp-session-windows-arm64.exe
 
     steps:
       - name: Checkout
@@ -41,15 +39,21 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Prepare artifact
+        id: package
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/rdp-session.exe" "dist/${{ matrix.exe_name }}"
+          $versionName = $env:RELEASE_TAG -replace '[^A-Za-z0-9._-]', '-'
+          $exeName = "rdp-session-$versionName-windows-${{ matrix.arch }}.exe"
+          Copy-Item "target/${{ matrix.target }}/release/rdp-session.exe" "dist/$exeName"
+          "exe_name=$exeName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.exe_name }}
-          path: dist/${{ matrix.exe_name }}
+          name: ${{ steps.package.outputs.exe_name }}
+          path: dist/${{ steps.package.outputs.exe_name }}
           if-no-files-found: error
 
       - name: Upload release asset
@@ -57,4 +61,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.release.tag_name }}
-          files: dist/${{ matrix.exe_name }}
+          files: dist/${{ steps.package.outputs.exe_name }}
