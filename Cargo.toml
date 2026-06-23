@@ -1,0 +1,20 @@
+[package]
+name = "rdp-session"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+ironrdp = { version = "0.16", features = ["connector", "graphics", "session"] }
+ironrdp-blocking = "0.9"
+ironrdp-graphics = "0.8"
+ironrdp-pdu = "0.8"
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sspi = { version = "0.21", features = ["network_client"] }
+tokio-rustls = "0.26"
+tracing = { version = "0.1", features = ["log"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+x509-cert = { version = "0.2", default-features = false, features = ["std"] }
