@@ -133,6 +133,11 @@ For dependency files, pin to a tag or commit:
 rdp-session @ git+https://github.com/jqwn/rdp-session.git@<tag-or-commit>
 ```
 
+Automatic binary download is supported for released tags whose package version
+matches the release tag, for example `0.2.1` and `v0.2.1`. If you install from a
+branch or arbitrary commit, pass `tool=...` or set `RDP_SESSION_BIN` to a binary
+built from the same commit.
+
 Use the default password environment variable:
 
 ```python
@@ -158,7 +163,9 @@ report = create_session(
 The wrapper locates the CLI from `tool=...`, `RDP_SESSION_BIN`, or `PATH`.
 On Windows x86_64 and ARM64, if no local binary is found, it downloads the
 matching versioned release asset from GitHub and caches it under the user's
-local app data directory.
+local app data directory. Cached and newly downloaded binaries are verified
+against the release `.sha256` sidecar before execution. This catches corruption
+and cache replacement, but it is not a substitute for code signing.
 
 ## Notes
 

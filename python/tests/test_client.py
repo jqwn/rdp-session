@@ -1,14 +1,18 @@
+import concurrent.futures
+import hashlib
 import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+if os.environ.get("RDP_SESSION_TEST_INSTALLED") != "1":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from rdp_session import RdpSessionError, create_session
 
@@ -35,15 +39,33 @@ REPORT = {
 }
 
 
+def completed(stdout=None, stderr=b"", returncode=0):
+    if stdout is None:
+        stdout = json.dumps(REPORT).encode("utf-8")
+    return subprocess.CompletedProcess(
+        args=[],
+        returncode=returncode,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
+def response(body):
+    result = io.BytesIO(body)
+    result.status = 200
+    result.__enter__ = lambda: result
+    result.__exit__ = lambda *args: None
+    return result
+
+
+def sha256_text(body, filename="asset.exe"):
+    return f"{hashlib.sha256(body).hexdigest()}  {filename}\n".encode("ascii")
+
+
 class CreateSessionTests(unittest.TestCase):
     @patch("rdp_session.client.subprocess.run")
     def test_uses_password_env_by_default(self, run):
-        run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout=json.dumps(REPORT),
-            stderr="",
-        )
+        run.return_value = completed()
 
         report = create_session(username="appuser", tool="rdp-session.exe")
 
@@ -55,28 +77,32 @@ class CreateSessionTests(unittest.TestCase):
         self.assertIsNone(run.call_args.kwargs["input"])
 
     @patch("rdp_session.client.subprocess.run")
-    def test_sends_direct_password_through_stdin(self, run):
-        run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout=json.dumps(REPORT),
-            stderr="",
+    def test_sends_direct_password_through_stdin_as_utf8(self, run):
+        report = dict(REPORT)
+        report["username"] = "ä用户"
+        run.return_value = completed(
+            stdout=json.dumps(report, ensure_ascii=False).encode("utf-8")
         )
 
-        create_session(username="appuser", password="secret", tool="rdp-session.exe")
+        result = create_session(
+            username="appuser",
+            password="päss🔒",
+            tool="rdp-session.exe",
+        )
 
         command = run.call_args.args[0]
+        self.assertEqual(result.username, "ä用户")
         self.assertIn("--password-stdin", command)
         self.assertNotIn("--password-env", command)
-        self.assertEqual(run.call_args.kwargs["input"], "secret")
+        self.assertNotIn("päss🔒", command)
+        self.assertEqual(run.call_args.kwargs["input"], "päss🔒".encode("utf-8"))
 
     @patch("rdp_session.client.subprocess.run")
     def test_raises_structured_cli_error(self, run):
-        run.return_value = subprocess.CompletedProcess(
-            args=[],
+        run.return_value = completed(
+            stdout=b"",
+            stderr=b'{"ok":false,"kind":"config","exit_code":10,"error":"bad input"}\n',
             returncode=10,
-            stdout="",
-            stderr='{"ok":false,"kind":"config","exit_code":10,"error":"bad input"}\n',
         )
 
         with self.assertRaises(RdpSessionError) as raised:
@@ -88,12 +114,7 @@ class CreateSessionTests(unittest.TestCase):
 
     @patch("rdp_session.client.subprocess.run")
     def test_passes_optional_create_arguments(self, run):
-        run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout=json.dumps(REPORT),
-            stderr="",
-        )
+        run.return_value = completed()
 
         create_session(
             username="appuser",
@@ -117,12 +138,7 @@ class CreateSessionTests(unittest.TestCase):
 
     @patch("rdp_session.client.subprocess.run")
     def test_env_values_are_merged_with_process_environment(self, run):
-        run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout=json.dumps(REPORT),
-            stderr="",
-        )
+        run.return_value = completed()
 
         create_session(
             username="appuser",
@@ -150,21 +166,16 @@ class CreateSessionTests(unittest.TestCase):
         version,
         urlopen,
     ):
-        run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout=json.dumps(REPORT),
-            stderr="",
-        )
+        binary = b"binary"
+        run.return_value = completed()
         which.return_value = None
         system.return_value = "Windows"
         machine.return_value = "AMD64"
-        version.return_value = "0.2.0"
-        response = io.BytesIO(b"binary")
-        response.status = 200
-        response.__enter__ = lambda: response
-        response.__exit__ = lambda *args: None
-        urlopen.return_value = response
+        version.return_value = "0.2.1"
+        urlopen.side_effect = [
+            response(sha256_text(binary, "rdp-session-v0.2.1-windows-x86_64.exe")),
+            response(binary),
+        ]
 
         with tempfile.TemporaryDirectory() as temp_dir:
             create_session(
@@ -176,15 +187,25 @@ class CreateSessionTests(unittest.TestCase):
                 Path(temp_dir)
                 / "rdp-session"
                 / "bin"
-                / "v0.2.0"
-                / "rdp-session-v0.2.0-windows-x86_64.exe"
+                / "v0.2.1"
+                / "rdp-session-v0.2.1-windows-x86_64.exe"
             )
             self.assertEqual(run.call_args.args[0][0], str(expected))
-            self.assertEqual(expected.read_bytes(), b"binary")
-            urlopen.assert_called_once_with(
-                "https://github.com/jqwn/rdp-session/releases/download/"
-                "v0.2.0/rdp-session-v0.2.0-windows-x86_64.exe",
-                timeout=60,
+            self.assertEqual(expected.read_bytes(), binary)
+            self.assertEqual(
+                urlopen.call_args_list,
+                [
+                    call(
+                        "https://github.com/jqwn/rdp-session/releases/download/"
+                        "v0.2.1/rdp-session-v0.2.1-windows-x86_64.exe.sha256",
+                        timeout=60,
+                    ),
+                    call(
+                        "https://github.com/jqwn/rdp-session/releases/download/"
+                        "v0.2.1/rdp-session-v0.2.1-windows-x86_64.exe",
+                        timeout=60,
+                    ),
+                ],
             )
 
     @patch("rdp_session.client.urllib.request.urlopen")
@@ -193,7 +214,7 @@ class CreateSessionTests(unittest.TestCase):
     @patch("rdp_session.client.platform.system")
     @patch("rdp_session.client.shutil.which")
     @patch("rdp_session.client.subprocess.run")
-    def test_uses_cached_windows_binary_without_download(
+    def test_redownloads_corrupt_cached_windows_binary(
         self,
         run,
         which,
@@ -202,32 +223,232 @@ class CreateSessionTests(unittest.TestCase):
         version,
         urlopen,
     ):
-        run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout=json.dumps(REPORT),
-            stderr="",
-        )
+        binary = b"binary"
+        run.return_value = completed()
         which.return_value = None
         system.return_value = "Windows"
         machine.return_value = "ARM64"
-        version.return_value = "0.2.0"
+        version.return_value = "0.2.1"
+        urlopen.side_effect = [
+            response(sha256_text(binary, "rdp-session-v0.2.1-windows-arm64.exe")),
+            response(binary),
+        ]
 
         with tempfile.TemporaryDirectory() as temp_dir:
             cached = (
                 Path(temp_dir)
                 / "rdp-session"
                 / "bin"
-                / "v0.2.0"
-                / "rdp-session-v0.2.0-windows-arm64.exe"
+                / "v0.2.1"
+                / "rdp-session-v0.2.1-windows-arm64.exe"
             )
             cached.parent.mkdir(parents=True)
-            cached.write_bytes(b"cached")
+            cached.write_bytes(b"corrupt")
 
             create_session(username="appuser", env={"LOCALAPPDATA": temp_dir})
 
             self.assertEqual(run.call_args.args[0][0], str(cached))
-            urlopen.assert_not_called()
+            self.assertEqual(cached.read_bytes(), binary)
+
+    @patch("rdp_session.client.urllib.request.urlopen")
+    @patch("rdp_session.client.importlib.metadata.version")
+    @patch("rdp_session.client.platform.machine")
+    @patch("rdp_session.client.platform.system")
+    @patch("rdp_session.client.shutil.which")
+    @patch("rdp_session.client.subprocess.run")
+    def test_rejects_truncated_download(
+        self,
+        run,
+        which,
+        system,
+        machine,
+        version,
+        urlopen,
+    ):
+        run.return_value = completed()
+        which.return_value = None
+        system.return_value = "Windows"
+        machine.return_value = "AMD64"
+        version.return_value = "0.2.1"
+        urlopen.side_effect = [
+            response(sha256_text(b"complete", "rdp-session-v0.2.1-windows-x86_64.exe")),
+            response(b"truncated"),
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(RdpSessionError):
+                create_session(username="appuser", env={"LOCALAPPDATA": temp_dir})
+
+            cache_dir = Path(temp_dir) / "rdp-session" / "bin" / "v0.2.1"
+            self.assertFalse(
+                (cache_dir / "rdp-session-v0.2.1-windows-x86_64.exe").exists()
+            )
+
+    @patch("rdp_session.client.urllib.request.urlopen")
+    @patch("rdp_session.client.importlib.metadata.version")
+    @patch("rdp_session.client.platform.machine")
+    @patch("rdp_session.client.platform.system")
+    @patch("rdp_session.client.shutil.which")
+    @patch("rdp_session.client.subprocess.run")
+    def test_uses_verified_cached_windows_binary_without_binary_download(
+        self,
+        run,
+        which,
+        system,
+        machine,
+        version,
+        urlopen,
+    ):
+        cached_bytes = b"cached"
+        run.return_value = completed()
+        which.return_value = None
+        system.return_value = "Windows"
+        machine.return_value = "ARM64"
+        version.return_value = "0.2.1"
+        urlopen.return_value = response(
+            sha256_text(cached_bytes, "rdp-session-v0.2.1-windows-arm64.exe")
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cached = (
+                Path(temp_dir)
+                / "rdp-session"
+                / "bin"
+                / "v0.2.1"
+                / "rdp-session-v0.2.1-windows-arm64.exe"
+            )
+            cached.parent.mkdir(parents=True)
+            cached.write_bytes(cached_bytes)
+
+            create_session(username="appuser", env={"LOCALAPPDATA": temp_dir})
+
+            self.assertEqual(run.call_args.args[0][0], str(cached))
+            urlopen.assert_called_once()
+
+    @patch("rdp_session.client.urllib.request.urlopen")
+    @patch("rdp_session.client.importlib.metadata.version")
+    @patch("rdp_session.client.platform.machine")
+    @patch("rdp_session.client.platform.system")
+    @patch("rdp_session.client.shutil.which")
+    def test_rejects_non_regular_cached_windows_binary(
+        self,
+        which,
+        system,
+        machine,
+        version,
+        urlopen,
+    ):
+        which.return_value = None
+        system.return_value = "Windows"
+        machine.return_value = "ARM64"
+        version.return_value = "0.2.1"
+        urlopen.return_value = response(
+            sha256_text(b"cached", "rdp-session-v0.2.1-windows-arm64.exe")
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cached = (
+                Path(temp_dir)
+                / "rdp-session"
+                / "bin"
+                / "v0.2.1"
+                / "rdp-session-v0.2.1-windows-arm64.exe"
+            )
+            cached.mkdir(parents=True)
+
+            with self.assertRaisesRegex(RdpSessionError, "not a regular file"):
+                create_session(username="appuser", env={"LOCALAPPDATA": temp_dir})
+
+    @patch("rdp_session.client.urllib.request.urlopen")
+    @patch("rdp_session.client.importlib.metadata.version")
+    @patch("rdp_session.client.platform.machine")
+    @patch("rdp_session.client.platform.system")
+    @patch("rdp_session.client.shutil.which")
+    @patch("rdp_session.client.subprocess.run")
+    def test_concurrent_first_use_uses_unique_temporary_files(
+        self,
+        run,
+        which,
+        system,
+        machine,
+        version,
+        urlopen,
+    ):
+        binary = b"binary"
+        barrier = threading.Barrier(2)
+        run.return_value = completed()
+        which.return_value = None
+        system.return_value = "Windows"
+        machine.return_value = "AMD64"
+        version.return_value = "0.2.1"
+
+        def open_url(url, timeout):
+            self.assertEqual(timeout, 60)
+            if url.endswith(".sha256"):
+                return response(
+                    sha256_text(binary, "rdp-session-v0.2.1-windows-x86_64.exe")
+                )
+            barrier.wait(timeout=5)
+            return response(binary)
+
+        urlopen.side_effect = open_url
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [
+                    executor.submit(
+                        create_session,
+                        username="appuser",
+                        env={"LOCALAPPDATA": temp_dir},
+                    )
+                    for _ in range(2)
+                ]
+                for future in futures:
+                    self.assertTrue(future.result().detached)
+
+            cached = (
+                Path(temp_dir)
+                / "rdp-session"
+                / "bin"
+                / "v0.2.1"
+                / "rdp-session-v0.2.1-windows-x86_64.exe"
+            )
+            self.assertEqual(cached.read_bytes(), binary)
+
+    @patch("rdp_session.client.subprocess.run")
+    def test_rejects_invalid_response_types(self, run):
+        report = dict(REPORT)
+        report["detached"] = "false"
+        run.return_value = completed(stdout=json.dumps(report).encode("utf-8"))
+
+        with self.assertRaisesRegex(RdpSessionError, "invalid rdp-session response"):
+            create_session(username="appuser", tool="rdp-session.exe")
+
+    @patch("rdp_session.client.subprocess.run")
+    def test_wraps_process_creation_os_error(self, run):
+        run.side_effect = PermissionError("access denied")
+
+        with self.assertRaisesRegex(RdpSessionError, "could not start"):
+            create_session(username="appuser", tool="rdp-session.exe")
+
+    @patch("rdp_session.client.platform.machine")
+    @patch("rdp_session.client.platform.system")
+    @patch("rdp_session.client.shutil.which")
+    @patch("rdp_session.client.importlib.metadata.version")
+    def test_rejects_non_release_versions_for_automatic_download(
+        self,
+        version,
+        which,
+        system,
+        machine,
+    ):
+        version.return_value = "0.2.1.dev1"
+        which.return_value = None
+        system.return_value = "Windows"
+        machine.return_value = "AMD64"
+
+        with self.assertRaisesRegex(RdpSessionError, "stable version"):
+            create_session(username="appuser")
 
 
 if __name__ == "__main__":

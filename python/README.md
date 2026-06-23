@@ -23,6 +23,11 @@ As a pinned dependency:
 rdp-session @ git+https://github.com/jqwn/rdp-session.git@<tag-or-commit>
 ```
 
+Automatic binary download is supported for released tags whose package version
+matches the release tag, for example `0.2.1` and `v0.2.1`. If you install from a
+branch or arbitrary commit, pass `tool=...` or set `RDP_SESSION_BIN` to a binary
+built from the same commit.
+
 The Rust CLI is resolved in this order:
 
 - pass `tool=...` to `create_session`
@@ -30,7 +35,10 @@ The Rust CLI is resolved in this order:
 - put `rdp-session.exe` on `PATH`
 - on Windows x86_64 or ARM64, automatically download the matching versioned
   release asset from GitHub and cache it under the user's local app data
-  directory
+  directory after verifying the release `.sha256` sidecar
+
+Checksum verification catches corruption and cache replacement, but it is not a
+substitute for code signing.
 
 ## Use
 
