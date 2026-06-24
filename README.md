@@ -121,7 +121,7 @@ with `--output json` and returns the parsed create-session report.
 python -m pip install -e .
 ```
 
-Install from GitHub without `#subdirectory`:
+Install from GitHub:
 
 ```sh
 python -m pip install "git+https://github.com/jqwn/rdp-session.git"
