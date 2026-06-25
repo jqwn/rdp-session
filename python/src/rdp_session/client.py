@@ -221,6 +221,10 @@ def _resolve_tool(
     if env_tool:
         return env_tool
 
+    bundled_tool = _bundled_windows_tool()
+    if bundled_tool is not None:
+        return str(bundled_tool)
+
     binary_name = "rdp-session.exe" if platform.system() == "Windows" else "rdp-session"
     resolved = shutil.which(binary_name, path=source_env.get("PATH"))
     if resolved:
@@ -239,6 +243,40 @@ def _build_process_env(env: Optional[Mapping[str, str]]) -> Optional[Mapping[str
     merged = os.environ.copy()
     merged.update(env)
     return merged
+
+
+def _bundled_windows_tool() -> Optional[Path]:
+    if platform.system() != "Windows":
+        return None
+
+    arch = _windows_asset_arch()
+    tool = _package_root() / "bin" / f"rdp-session-windows-{arch}.exe"
+    if not tool.exists():
+        return None
+    if not tool.is_file():
+        raise RdpSessionError(f"bundled rdp-session binary is not a regular file: {tool}")
+
+    checksum_path = tool.with_name(f"{tool.name}.sha256")
+    if not checksum_path.is_file():
+        raise RdpSessionError(f"bundled rdp-session checksum is missing: {checksum_path}")
+
+    try:
+        expected_sha256 = _parse_sha256_text(
+            checksum_path.read_text(encoding="ascii"),
+            str(checksum_path),
+        )
+        actual_sha256 = _sha256_file(tool)
+    except OSError as exc:
+        raise RdpSessionError(f"could not verify bundled rdp-session binary {tool}") from exc
+
+    if actual_sha256 != expected_sha256:
+        raise RdpSessionError(f"bundled rdp-session binary checksum mismatch: {tool}")
+
+    return tool
+
+
+def _package_root() -> Path:
+    return Path(__file__).resolve().parent
 
 
 def _ensure_downloaded_windows_tool(env: Mapping[str, str]) -> Path:
@@ -360,9 +398,13 @@ def _download_sha256(tag: str, asset_name: str) -> str:
             f"{url}; pass tool=... or set {DEFAULT_BINARY_ENV} to use a local binary"
         ) from exc
 
+    return _parse_sha256_text(text, url)
+
+
+def _parse_sha256_text(text: str, source: str) -> str:
     token = text.split()[0] if text.split() else ""
     if len(token) != 64 or not all(char in "0123456789abcdefABCDEF" for char in token):
-        raise RdpSessionError(f"invalid rdp-session checksum file from {url}")
+        raise RdpSessionError(f"invalid rdp-session checksum file from {source}")
 
     return token.lower()
 

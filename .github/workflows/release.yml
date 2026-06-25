@@ -206,3 +206,122 @@ jobs:
         with:
           tag_name: ${{ needs.validate.outputs.release_tag }}
           files: dist/*
+
+  package-python:
+    name: Build Python package
+    runs-on: ubuntu-latest
+    needs:
+      - validate
+      - build-windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Download Windows binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rdp-session-${{ needs.validate.outputs.release_tag }}-windows-*
+          path: release-bin
+          merge-multiple: true
+
+      - name: Bundle Windows binaries
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p python/src/rdp_session/bin
+          for arch in x86_64 arm64; do
+            src="release-bin/rdp-session-${RELEASE_TAG}-windows-${arch}.exe"
+            dst="python/src/rdp_session/bin/rdp-session-windows-${arch}.exe"
+            cp "$src" "$dst"
+            cp "$src.sha256" "$dst.sha256"
+          done
+
+      - name: Build Python distributions
+        run: |
+          rm -rf build dist
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: Verify bundled wheel binaries
+        env:
+          EXPECTED_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import importlib.metadata
+          import os
+          import pathlib
+          import subprocess
+          import sys
+          import zipfile
+
+          dist = pathlib.Path("dist")
+          wheels = sorted(dist.glob("rdp_session-*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit(f"expected one wheel, found {wheels}")
+
+          wheel = wheels[0]
+          with zipfile.ZipFile(wheel) as archive:
+              names = set(archive.namelist())
+              for arch in ("x86_64", "arm64"):
+                  exe_name = f"rdp_session/bin/rdp-session-windows-{arch}.exe"
+                  checksum_name = f"{exe_name}.sha256"
+                  if exe_name not in names:
+                      raise SystemExit(f"missing {exe_name} in {wheel}")
+                  if checksum_name not in names:
+                      raise SystemExit(f"missing {checksum_name} in {wheel}")
+                  expected = archive.read(checksum_name).decode("ascii").split()[0].lower()
+                  actual = hashlib.sha256(archive.read(exe_name)).hexdigest()
+                  if actual != expected:
+                      raise SystemExit(f"checksum mismatch for {exe_name}")
+
+          subprocess.run(
+              [sys.executable, "-m", "pip", "install", "--no-deps", str(wheel)],
+              check=True,
+              stdout=subprocess.DEVNULL,
+          )
+          actual = importlib.metadata.version("rdp-session")
+          expected = os.environ["EXPECTED_VERSION"]
+          if actual != expected:
+              raise SystemExit(f"installed package version {actual} != {expected}")
+          PY
+
+      - name: Upload Python distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-dist-${{ needs.validate.outputs.release_tag }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish-pypi:
+    name: Publish Python package to PyPI
+    runs-on: ubuntu-latest
+    needs:
+      - validate
+      - package-python
+      - publish-assets
+    if: github.event_name == 'release'
+    environment:
+      name: pypi
+      url: https://pypi.org/p/rdp-session
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download Python distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-dist-${{ needs.validate.outputs.release_tag }}
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

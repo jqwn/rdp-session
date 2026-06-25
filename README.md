@@ -117,6 +117,15 @@ sources as the Rust CLI; they do not accept a direct password argument.
 A subprocess-based Python package lives in `python/`. It invokes the Rust CLI
 with `--output json` and returns the parsed create-session report.
 
+Install from PyPI:
+
+```sh
+python -m pip install rdp-session
+```
+
+PyPI wheels include the Windows x86_64 and ARM64 CLI binaries, so the wrapper can
+use the matching bundled `rdp-session.exe` immediately after installation.
+
 ```sh
 python -m pip install -e .
 ```
@@ -133,10 +142,11 @@ For dependency files, pin to a tag or commit:
 rdp-session @ git+https://github.com/jqwn/rdp-session.git@<tag-or-commit>
 ```
 
-Automatic binary download is supported for released tags whose package version
-matches the release tag, for example `0.2.1` and `v0.2.1`. If you install from a
-branch or arbitrary commit, pass `tool=...` or set `RDP_SESSION_BIN` to a binary
-built from the same commit.
+Automatic binary download remains available for source/GitHub installs when no
+bundled, configured, or PATH binary is found. It is supported for released tags
+whose package version matches the release tag, for example `0.2.2` and `v0.2.2`.
+If you install from a branch or arbitrary commit, pass `tool=...` or set
+`RDP_SESSION_BIN` to a binary built from the same commit.
 
 Use the default password environment variable:
 
@@ -160,12 +170,13 @@ report = create_session(
 )
 ```
 
-The wrapper locates the CLI from `tool=...`, `RDP_SESSION_BIN`, or `PATH`.
-On Windows x86_64 and ARM64, if no local binary is found, it downloads the
-matching versioned release asset from GitHub and caches it under the user's
-local app data directory. Cached and newly downloaded binaries are verified
-against the release `.sha256` sidecar before execution. This catches corruption
-and cache replacement, but it is not a substitute for code signing.
+The wrapper locates the CLI from `tool=...`, `RDP_SESSION_BIN`, the bundled PyPI
+wheel binary, or `PATH`. On Windows x86_64 and ARM64, if no local binary is
+found, it downloads the matching versioned release asset from GitHub and caches
+it under the user's local app data directory. Bundled, cached, and newly
+downloaded binaries are verified against `.sha256` sidecars before execution.
+This catches corruption and cache replacement, but it is not a substitute for
+code signing.
 
 ## Notes
 

@@ -1,21 +1,35 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=69,<77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "rdp-session"
-version = "0.2.1"
+version = "0.2.2"
 description = "Thin Python subprocess wrapper for the rdp-session Rust CLI"
 readme = "python/README.md"
 requires-python = ">=3.9"
+license = { text = "MIT" }
 authors = [
   { name = "rdp-session contributors" },
 ]
+keywords = ["rdp", "windows", "automation", "ironrdp"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Operating System :: Microsoft :: Windows",
+  "License :: OSI Approved :: MIT License",
 ]
+
+[project.urls]
+Homepage = "https://github.com/jqwn/rdp-session"
+Repository = "https://github.com/jqwn/rdp-session"
+Issues = "https://github.com/jqwn/rdp-session/issues"
+
+[tool.setuptools]
+license-files = ["LICENSE"]
 
 [tool.setuptools.packages.find]
 where = ["python/src"]
+
+[tool.setuptools.package-data]
+rdp_session = ["bin/*.exe", "bin/*.sha256"]

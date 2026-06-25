@@ -1,0 +1,2 @@
+include LICENSE
+recursive-include python/src/rdp_session/bin *.exe *.sha256

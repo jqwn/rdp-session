@@ -5,3 +5,5 @@ __pycache__/
 *.egg-info/
 .DS_Store
 prod-*.png
+/python/src/rdp_session/bin/*.exe
+/python/src/rdp_session/bin/*.sha256

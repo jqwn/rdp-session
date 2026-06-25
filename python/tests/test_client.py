@@ -151,6 +151,82 @@ class CreateSessionTests(unittest.TestCase):
         self.assertEqual(child_env["RDP_PASSWORD"], "secret")
         self.assertEqual(child_env.get("PATH"), os.environ.get("PATH"))
 
+    @patch("rdp_session.client.subprocess.run")
+    def test_explicit_tool_wins_over_bundled_binary(self, run):
+        run.return_value = completed()
+
+        create_session(username="appuser", tool=r"C:\Tools\rdp-session.exe")
+
+        self.assertEqual(run.call_args.args[0][0], r"C:\Tools\rdp-session.exe")
+
+    @patch("rdp_session.client._package_root")
+    @patch("rdp_session.client.platform.machine")
+    @patch("rdp_session.client.platform.system")
+    @patch("rdp_session.client.shutil.which")
+    @patch("rdp_session.client.subprocess.run")
+    def test_uses_bundled_windows_binary_before_path(
+        self,
+        run,
+        which,
+        system,
+        machine,
+        package_root,
+    ):
+        binary = b"bundled"
+        run.return_value = completed()
+        which.return_value = r"C:\Old\rdp-session.exe"
+        system.return_value = "Windows"
+        machine.return_value = "ARM64"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_root.return_value = root
+            bundled = root / "bin" / "rdp-session-windows-arm64.exe"
+            bundled.parent.mkdir()
+            bundled.write_bytes(binary)
+            bundled.with_name(f"{bundled.name}.sha256").write_text(
+                sha256_text(binary, bundled.name).decode("ascii"),
+                encoding="ascii",
+            )
+
+            create_session(username="appuser")
+
+            self.assertEqual(run.call_args.args[0][0], str(bundled))
+            which.assert_not_called()
+
+    @patch("rdp_session.client._package_root")
+    @patch("rdp_session.client.platform.machine")
+    @patch("rdp_session.client.platform.system")
+    @patch("rdp_session.client.shutil.which")
+    @patch("rdp_session.client.subprocess.run")
+    def test_rejects_bundled_binary_checksum_mismatch(
+        self,
+        run,
+        which,
+        system,
+        machine,
+        package_root,
+    ):
+        system.return_value = "Windows"
+        machine.return_value = "AMD64"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_root.return_value = root
+            bundled = root / "bin" / "rdp-session-windows-x86_64.exe"
+            bundled.parent.mkdir()
+            bundled.write_bytes(b"actual")
+            bundled.with_name(f"{bundled.name}.sha256").write_text(
+                sha256_text(b"expected", bundled.name).decode("ascii"),
+                encoding="ascii",
+            )
+
+            with self.assertRaisesRegex(RdpSessionError, "checksum mismatch"):
+                create_session(username="appuser")
+
+            run.assert_not_called()
+            which.assert_not_called()
+
     @patch("rdp_session.client.urllib.request.urlopen")
     @patch("rdp_session.client.importlib.metadata.version")
     @patch("rdp_session.client.platform.machine")
